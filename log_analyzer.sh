@@ -182,7 +182,6 @@ extract_ips() {
         "last-10mins")
             echo "Filtering last 10 minutes entries..."
             # More precise filtering for minutes
-            local current_time=$(date +"%d/%b/%Y:%H:%M")
             awk -v pattern="$time_pattern" '$4 ~ pattern' "$log_file" > "$temp_logs" 2>/dev/null || true
             ;;
         "all")
@@ -255,6 +254,7 @@ get_risk_level() {
 # Show recent log entries for high-risk IPs
 show_recent_entries() {
     local log_file="$1"
+    shift
     local high_risk_ips=("$@")
     
     if [[ ${#high_risk_ips[@]} -eq 0 ]]; then
