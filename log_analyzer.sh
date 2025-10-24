@@ -148,7 +148,6 @@ filter_custom_range() {
         return 1
     fi
     
-    local start_time end_time
     start_time=$(echo "$time_range" | cut -d'-' -f1)
     end_time=$(echo "$time_range" | cut -d'-' -f2)
     
@@ -189,33 +188,6 @@ filter_custom_range() {
     return 0
 }
 
-# Get raw log entries for recent hits display
-get_raw_logs_for_time_range() {
-    local log_file="$1"
-    local time_range="$2"
-    
-    case "$time_range" in
-        "today")
-            # Get today's raw log entries
-            grep "$(date "+%d/%b/%Y")" "$log_file" 2>/dev/null || echo ""
-            ;;
-        "last_hour")
-            # Get last hour raw log entries  
-            local hour_pattern
-            hour_pattern=$(date --date='1 hour ago' "+%d/%b/%Y:%H")
-            grep "\[$hour_pattern" "$log_file" 2>/dev/null || echo ""
-            ;;
-        "last_10min")
-            # Get last 10 minutes raw log entries using efficient method
-            awk -v d="$(date -d '10 min ago' '+%d/%b/%Y:%H:%M')" '$4 > "["d' "$log_file" 2>/dev/null || echo ""
-            ;;
-        "custom")
-            # For custom range, return all of today's logs and we'll filter later
-            grep "$(date "+%d/%b/%Y")" "$log_file" 2>/dev/null || echo ""
-            ;;
-    esac
-}
-
 # Check IP against AlienVault OTX
 check_ip_threat() {
     local ip="$1"
@@ -249,33 +221,18 @@ get_risk_level() {
     fi
 }
 
-# Show recent hits for high-risk IPs
+# Show recent hits for high-risk IPs - FIXED VERSION
 show_recent_hits() {
     local ip="$1"
     local log_file="$2"
-    local time_range="$3"
     
     echo ""
     echo "Recent 5 hits from $ip:"
     echo "----------------------"
     
+    # Use grep directly on the original log file to get last 5 entries
     local recent_entries
-    
-    if [[ "$time_range" == "custom" ]]; then
-        # For custom range, we need to filter by time
-        recent_entries=$(grep "^$ip" "$log_file" | awk -v start="$start_time" -v end="$end_time" '
-        {
-            if (match($4, /:[0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
-                time_part = substr($4, 14, 5)
-                if (time_part >= start && time_part <= end) {
-                    print $0
-                }
-            }
-        }' | tail -5)
-    else
-        # For predefined ranges, use simple grep
-        recent_entries=$(grep "^$ip" "$log_file" | tail -5)
-    fi
+    recent_entries=$(grep "^$ip" "$log_file" | tail -5)
     
     if [[ -z "$recent_entries" ]]; then
         echo "  No recent entries found"
@@ -311,35 +268,27 @@ main() {
         esac
     done
     
-    # Store custom times if needed
-    if [[ "$time_range" == "custom" ]]; then
-        if ! filter_custom_range "$LOG_FILE" "/tmp/ips.$$"; then
-            exit 1
-        fi
-        # start_time and end_time are already set in filter_custom_range function
-    else
-        # Step 3: Extract IPs based on time range
-        local ip_file="/tmp/ips.$$"
-        
-        case "$time_range" in
-            "today")
-                filter_todays_logs "$LOG_FILE" "$ip_file" || exit 1
-                ;;
-            "last_hour")
-                filter_last_hour "$LOG_FILE" "$ip_file" || exit 1
-                ;;
-            "last_10min")
-                filter_last_10min "$LOG_FILE" "$ip_file" || exit 1
-                ;;
-        esac
-    fi
+    # Step 3: Extract IPs based on time range
+    local ip_file="/tmp/ips.$$"
     
-    # Step 4: Get raw logs for recent hits display
-    echo "Preparing log data for analysis..."
-    local raw_logs_file="/tmp/filtered_logs.$$"
-    get_raw_logs_for_time_range "$LOG_FILE" "$time_range" > "$raw_logs_file"
+    case "$time_range" in
+        "today")
+            filter_todays_logs "$LOG_FILE" "$ip_file" || exit 1
+            ;;
+        "last_hour")
+            filter_last_hour "$LOG_FILE" "$ip_file" || exit 1
+            ;;
+        "last_10min")
+            filter_last_10min "$LOG_FILE" "$ip_file" || exit 1
+            ;;
+        "custom")
+            if ! filter_custom_range "$LOG_FILE" "$ip_file"; then
+                exit 1
+            fi
+            ;;
+    esac
     
-    # Step 5: Analyze IPs - Clean output without progress messages
+    # Step 4: Analyze IPs - Clean output without progress messages
     echo ""
     echo "THREAT ANALYSIS RESULTS:"
     echo "========================"
@@ -348,14 +297,6 @@ main() {
     
     local high_risk_ips=()
     local total_ips=0
-    
-    # Read from the appropriate IP file
-    local ip_file_to_use="/tmp/ips.$$"
-    if [[ "$time_range" == "custom" ]]; then
-        ip_file_to_use="/tmp/ips.$$"
-    else
-        ip_file_to_use="/tmp/ips.$$"
-    fi
     
     while read -r line; do
         local hits ip
@@ -404,18 +345,20 @@ main() {
         # Rate limiting
         sleep 1
         
-    done < "$ip_file_to_use"
+    done < "$ip_file"
     
-    # Step 6: Show recent hits for high-risk IPs
+    # Step 5: Show recent hits for high-risk IPs - FIXED
     if [[ ${#high_risk_ips[@]} -gt 0 ]]; then
         echo ""
         echo "=== RECENT ACTIVITY FROM HIGH-RISK IPs ==="
+        echo ""
         for ip in "${high_risk_ips[@]}"; do
-            show_recent_hits "$ip" "$raw_logs_file" "$time_range"
+            show_recent_hits "$ip" "$LOG_FILE"
+            echo ""
         done
     fi
     
-    # Step 7: Show results and CSF blocking commands
+    # Step 6: Show results and CSF blocking commands - FIXED
     echo ""
     echo "=== ANALYSIS COMPLETE ==="
     echo "Total IPs checked: $total_ips"
