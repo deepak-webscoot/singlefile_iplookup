@@ -1,11 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Script: log_analyzer.sh
+# Script: single_file_threat_checker.sh
 # Description: Single file IP threat intelligence with time range filtering
-# Usage: curl -sL https://raw.githubusercontent.com/deepak-webscoot/singlefile_iplookup/main/log_analyzer.sh | bash -s -- /path/to/access_log
 
-SCRIPT_NAME="log_analyzer.sh"
+SCRIPT_NAME="single_file_threat_checker.sh"
 OTX_API_KEY="ad3be64c61425dcbca6a5dbd43f3c8e056ced8f3c2662dc5248c20815c083564"
 
 # Cleanup function
@@ -25,9 +24,6 @@ usage() {
     echo "• AlienVault OTX threat checking"
     echo "• Shows recent hits for high-risk IPs"
     echo "• Generates CSF blocking commands"
-    echo ""
-    echo "Remote Execution:"
-    echo "curl -sL https://raw.githubusercontent.com/deepak-webscoot/singlefile_iplookup/main/log_analyzer.sh | bash -s -- /path/to/access_log"
     exit 0
 }
 
@@ -63,21 +59,6 @@ show_menu() {
     echo "4) Custom time range (flexible format)"
     echo ""
     echo -n "Enter your choice (1-4): "
-}
-
-get_time_range_choice() {
-    while true; do
-        show_menu
-        read -r choice < /dev/tty
-        
-        case "$choice" in
-            1) echo "today"; break ;;
-            2) echo "last_hour"; break ;;
-            3) echo "last_10min"; break ;;
-            4) echo "custom"; break ;;
-            *) echo "Invalid choice. Please enter 1, 2, 3, or 4." ;;
-        esac
-    done
 }
 
 # Time range filtering functions using efficient awk commands
@@ -159,7 +140,7 @@ filter_custom_range() {
     echo "  - 14:30-15:45    (2:30PM to 3:45PM)"
     echo ""
     echo -n "Enter time range (HH:MM-HH:MM): "
-    read -r time_range < /dev/tty
+    read -r time_range
     
     # Validate time range format
     if ! [[ "$time_range" =~ ^[0-9]{1,2}:[0-9]{2}-[0-9]{1,2}:[0-9]{2}$ ]]; then
@@ -240,7 +221,7 @@ get_risk_level() {
     fi
 }
 
-# Show recent hits for high-risk IPs
+# Show recent hits for high-risk IPs - FIXED VERSION
 show_recent_hits() {
     local ip="$1"
     local log_file="$2"
@@ -273,9 +254,19 @@ main() {
     check_dependencies
     echo "✓ Basic tools available"
     
-    # Step 2: Get time range choice
-    local time_range
-    time_range=$(get_time_range_choice)
+    # Step 2: Show menu and get choice
+    while true; do
+        show_menu
+        read -r choice
+        
+        case "$choice" in
+            1) time_range="today"; break ;;
+            2) time_range="last_hour"; break ;;
+            3) time_range="last_10min"; break ;;
+            4) time_range="custom"; break ;;
+            *) echo "Invalid choice. Please enter 1, 2, 3, or 4." ;;
+        esac
+    done
     
     # Step 3: Extract IPs based on time range
     local ip_file="/tmp/ips.$$"
@@ -356,7 +347,7 @@ main() {
         
     done < "$ip_file"
     
-    # Step 5: Show recent hits for high-risk IPs
+    # Step 5: Show recent hits for high-risk IPs - FIXED
     if [[ ${#high_risk_ips[@]} -gt 0 ]]; then
         echo ""
         echo "=== RECENT ACTIVITY FROM HIGH-RISK IPs ==="
@@ -367,7 +358,7 @@ main() {
         done
     fi
     
-    # Step 6: Show results and CSF blocking commands
+    # Step 6: Show results and CSF blocking commands - FIXED
     echo ""
     echo "=== ANALYSIS COMPLETE ==="
     echo "Total IPs checked: $total_ips"
