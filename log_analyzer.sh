@@ -56,19 +56,19 @@ show_menu() {
     echo "1) Today's logs"
     echo "2) Last Hour (60 minutes)" 
     echo "3) Last 10 Minutes"
-    echo "4) Custom time range (e.g., 07:00-20:00)"
+    echo "4) Custom time range (flexible format)"
     echo ""
     echo -n "Enter your choice (1-4): "
 }
 
-# Time range filtering functions using your efficient awk commands
+# Time range filtering functions using efficient awk commands
 filter_todays_logs() {
     local log_file="$1"
     local output_file="$2"
     
     echo "Filtering today's logs..."
     
-    # Your efficient today's filter
+    # Efficient today's filter - always get top 30 IPs
     awk -v d="$(date "+%d/%b/%Y")" '$4 ~ d {print $1}' "$log_file" | \
     sort | uniq -c | sort -nr | head -30 > "$output_file"
     
@@ -90,7 +90,7 @@ filter_last_hour() {
     
     echo "Filtering logs from last hour..."
     
-    # Your efficient last hour filter
+    # Efficient last hour filter - always get top 30 IPs
     awk -v d="$(date --date='1 hour ago' "+%d/%b/%Y:%H")" '$4 ~ d {print $1}' "$log_file" | \
     sort | uniq -c | sort -nr | head -30 > "$output_file"
     
@@ -112,7 +112,7 @@ filter_last_10min() {
     
     echo "Filtering logs from last 10 minutes..."
     
-    # Your efficient last 10 minutes filter
+    # Efficient last 10 minutes filter - always get top 30 IPs
     awk -v d="$(date -d '10 min ago' '+%d/%b/%Y:%H:%M')" '$4 > "["d {print $1}' "$log_file" | \
     sort | uniq -c | sort -nr | head -30 > "$output_file"
     
@@ -132,16 +132,29 @@ filter_custom_range() {
     local log_file="$1"
     local output_file="$2"
     
-    echo -n "Enter start time (HH:MM format, e.g., 07:00): "
-    read -r start_time
-    echo -n "Enter end time (HH:MM format, e.g., 20:00): "
-    read -r end_time
+    echo ""
+    echo "Custom Time Range Options:"
+    echo "Examples:"
+    echo "  - 07:00-20:00    (7AM to 8PM)"
+    echo "  - 09:00-09:23    (9AM to 9:23AM)" 
+    echo "  - 14:30-15:45    (2:30PM to 3:45PM)"
+    echo ""
+    echo -n "Enter time range (HH:MM-HH:MM): "
+    read -r time_range
     
-    # Validate time format
-    if ! [[ "$start_time" =~ ^[0-9]{2}:[0-9]{2}$ ]] || ! [[ "$end_time" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
-        echo "Error: Invalid time format. Use HH:MM format." >&2
+    # Validate time range format
+    if ! [[ "$time_range" =~ ^[0-9]{1,2}:[0-9]{2}-[0-9]{1,2}:[0-9]{2}$ ]]; then
+        echo "Error: Invalid time format. Use HH:MM-HH:MM format." >&2
         return 1
     fi
+    
+    local start_time end_time
+    start_time=$(echo "$time_range" | cut -d'-' -f1)
+    end_time=$(echo "$time_range" | cut -d'-' -f2)
+    
+    # Normalize times to HH:MM format
+    start_time=$(date -d "$start_time" +"%H:%M" 2>/dev/null || echo "$start_time")
+    end_time=$(date -d "$end_time" +"%H:%M" 2>/dev/null || echo "$end_time")
     
     echo "Filtering logs from $start_time to $end_time..."
     
@@ -149,7 +162,7 @@ filter_custom_range() {
     local today
     today=$(date +"%d/%b/%Y")
     
-    # Efficient custom range filtering
+    # Efficient custom range filtering - always get top 30 IPs
     awk -v today="$today" -v start="$start_time" -v end="$end_time" '
     {
         # Extract date and time from log line (field 4)
@@ -197,8 +210,8 @@ get_raw_logs_for_time_range() {
             awk -v d="$(date -d '10 min ago' '+%d/%b/%Y:%H:%M')" '$4 > "["d' "$log_file" 2>/dev/null || echo ""
             ;;
         "custom")
-            # For custom range, we'll filter on the fly when showing recent hits
-            echo "CUSTOM"
+            # For custom range, return all of today's logs and we'll filter later
+            grep "$(date "+%d/%b/%Y")" "$log_file" 2>/dev/null || echo ""
             ;;
     esac
 }
@@ -249,8 +262,8 @@ show_recent_hits() {
     local recent_entries
     
     if [[ "$time_range" == "custom" ]]; then
-        # For custom range, filter on the fly
-        recent_entries=$(grep "^$ip" "$log_file" | tail -100 | awk -v start="$start_time" -v end="$end_time" '
+        # For custom range, we need to filter by time
+        recent_entries=$(grep "^$ip" "$log_file" | awk -v start="$start_time" -v end="$end_time" '
         {
             if (match($4, /:[0-9]{2}:[0-9]{2}:[0-9]{2}/)) {
                 time_part = substr($4, 14, 5)
@@ -260,7 +273,7 @@ show_recent_hits() {
             }
         }' | tail -5)
     else
-        # For predefined ranges, use grep on already filtered set
+        # For predefined ranges, use simple grep
         recent_entries=$(grep "^$ip" "$log_file" | tail -5)
     fi
     
@@ -269,9 +282,9 @@ show_recent_hits() {
         return
     fi
     
+    # Show the actual log entries
     echo "$recent_entries" | while read -r line; do
-        # Show simplified log entry (IP, timestamp, request, status)
-        echo "  $line" | awk '{print $1, $4, $7, $9}' | cut -c1-100
+        echo "  $line"
     done
 }
 
@@ -300,36 +313,33 @@ main() {
     
     # Store custom times if needed
     if [[ "$time_range" == "custom" ]]; then
-        echo -n "Enter start time (HH:MM format, e.g., 07:00): "
-        read -r start_time
-        echo -n "Enter end time (HH:MM format, e.g., 20:00): "
-        read -r end_time
+        if ! filter_custom_range "$LOG_FILE" "/tmp/ips.$$"; then
+            exit 1
+        fi
+        # start_time and end_time are already set in filter_custom_range function
+    else
+        # Step 3: Extract IPs based on time range
+        local ip_file="/tmp/ips.$$"
+        
+        case "$time_range" in
+            "today")
+                filter_todays_logs "$LOG_FILE" "$ip_file" || exit 1
+                ;;
+            "last_hour")
+                filter_last_hour "$LOG_FILE" "$ip_file" || exit 1
+                ;;
+            "last_10min")
+                filter_last_10min "$LOG_FILE" "$ip_file" || exit 1
+                ;;
+        esac
     fi
-    
-    # Step 3: Extract IPs based on time range
-    local ip_file="/tmp/ips.$$"
-    
-    case "$time_range" in
-        "today")
-            filter_todays_logs "$LOG_FILE" "$ip_file" || exit 1
-            ;;
-        "last_hour")
-            filter_last_hour "$LOG_FILE" "$ip_file" || exit 1
-            ;;
-        "last_10min")
-            filter_last_10min "$LOG_FILE" "$ip_file" || exit 1
-            ;;
-        "custom")
-            filter_custom_range "$LOG_FILE" "$ip_file" || exit 1
-            ;;
-    esac
     
     # Step 4: Get raw logs for recent hits display
     echo "Preparing log data for analysis..."
     local raw_logs_file="/tmp/filtered_logs.$$"
     get_raw_logs_for_time_range "$LOG_FILE" "$time_range" > "$raw_logs_file"
     
-    # Step 5: Analyze IPs
+    # Step 5: Analyze IPs - Clean output without progress messages
     echo ""
     echo "THREAT ANALYSIS RESULTS:"
     echo "========================"
@@ -339,6 +349,14 @@ main() {
     local high_risk_ips=()
     local total_ips=0
     
+    # Read from the appropriate IP file
+    local ip_file_to_use="/tmp/ips.$$"
+    if [[ "$time_range" == "custom" ]]; then
+        ip_file_to_use="/tmp/ips.$$"
+    else
+        ip_file_to_use="/tmp/ips.$$"
+    fi
+    
     while read -r line; do
         local hits ip
         hits=$(echo "$line" | awk '{print $1}')
@@ -346,7 +364,6 @@ main() {
         
         [[ -z "$ip" ]] && continue
         
-        echo -n "Checking $ip... " >&2
         total_ips=$((total_ips + 1))
         
         # Check IP threat
@@ -372,7 +389,7 @@ main() {
             high_risk_ips+=("$ip")
         fi
         
-        # Display result
+        # Display result - clean output without progress messages
         printf "%-6s %-18s %-12s %-8s %-8s " "$hits" "$ip" "$country" "$pulses" "$risk_level"
         
         # Recommendation
@@ -384,12 +401,10 @@ main() {
             echo "✓ OK"
         fi
         
-        echo "done" >&2
-        
         # Rate limiting
         sleep 1
         
-    done < "$ip_file"
+    done < "$ip_file_to_use"
     
     # Step 6: Show recent hits for high-risk IPs
     if [[ ${#high_risk_ips[@]} -gt 0 ]]; then
@@ -400,7 +415,7 @@ main() {
         done
     fi
     
-    # Step 7: Show results and recommendations
+    # Step 7: Show results and CSF blocking commands
     echo ""
     echo "=== ANALYSIS COMPLETE ==="
     echo "Total IPs checked: $total_ips"
@@ -408,11 +423,16 @@ main() {
     
     if [[ ${#high_risk_ips[@]} -gt 0 ]]; then
         echo ""
-        echo "🚨 RECOMMENDED CSF COMMANDS:"
-        echo "============================"
+        echo "🚨 RECOMMENDED CSF BLOCKING COMMANDS:"
+        echo "====================================="
         for ip in "${high_risk_ips[@]}"; do
-            echo "csf -d $ip  # Block high-risk IP"
+            echo "csf -d $ip"
         done
+        echo ""
+        echo "To block all high-risk IPs, copy and run the above commands."
+    else
+        echo ""
+        echo "No high-risk IPs found. No blocking actions required."
     fi
 }
 
