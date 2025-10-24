@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Script: log_analyzer.sh
-# Description: Analyze log files for threat intelligence
+# Script: single_file_iplookup.sh
+# Description: Interactive log file threat analyzer
 
-SCRIPT_NAME="log_analyzer.sh"
+SCRIPT_NAME="single_file_iplookup.sh"
 OTX_API_KEY="ad3be64c61425dcbca6a5dbd43f3c8e056ced8f3c2662dc5248c20815c083564"
 
 # Cleanup function
@@ -16,31 +16,24 @@ trap cleanup EXIT INT TERM
 
 # Display usage
 usage() {
-    echo "=== Log File Threat Analyzer ==="
-    echo "Usage: $0 [OPTION|FILE]"
+    echo "=== Single File IP Threat Analyzer ==="
     echo ""
-    echo "Options:"
-    echo "  --today         Analyze today's traffic from default logs"
-    echo "  --last-hour     Analyze last hour's traffic from default logs" 
-    echo "  --last-10mins   Analyze last 10 minutes traffic from default logs"
-    echo "  FILE            Analyze specific log file"
-    echo "  -h, --help      Show this help"
+    echo "This script will:"
+    echo "1. Ask for log file location"
+    echo "2. Ask for time range to analyze"
+    echo "3. Show threat analysis results"
+    echo "4. Show recent log entries for high-risk IPs"
     echo ""
-    echo "Examples:"
-    echo "  $0 /var/log/virtualmin/domain.com_access_log"
-    echo "  $0 --today"
-    echo "  $0 --last-hour"
-    echo "  $0 --last-10mins"
     exit 0
 }
 
-if [[ "$#" -eq 0 ]] || [[ "$1" =~ ^(-h|--help)$ ]]; then
+if [[ "$#" -gt 0 ]] && [[ "$1" =~ ^(-h|--help)$ ]]; then
     usage
 fi
 
 # Check dependencies
 check_dependencies() {
-    for dep in grep awk curl jq date; do
+    for dep in grep awk curl jq; do
         if ! command -v "$dep" &>/dev/null; then
             echo "Error: Required tool '$dep' not found"
             exit 1
@@ -48,23 +41,92 @@ check_dependencies() {
     done
 }
 
-# Find default log directory
-find_log_directory() {
-    if [[ -d "/var/log/virtualmin" ]]; then
-        echo "/var/log/virtualmin"
-    elif [[ -d "/var/log/apache2/domlogs" ]]; then
-        echo "/var/log/apache2/domlogs"
-    elif [[ -d "/var/log/nginx" ]]; then
-        echo "/var/log/nginx"
-    elif [[ -d "/var/log/httpd" ]]; then
-        echo "/var/log/httpd"
-    else
-        echo "Error: No log directory found" >&2
+# Interactive file selection
+select_log_file() {
+    local default_locations=(
+        "/var/log/virtualmin"
+        "/var/log/apache2/domlogs" 
+        "/var/log/nginx"
+        "/var/log/httpd"
+    )
+    
+    echo ""
+    echo "📁 LOG FILE SELECTION"
+    echo "===================="
+    
+    # Check for common log directories
+    local found_dirs=()
+    for dir in "${default_locations[@]}"; do
+        if [[ -d "$dir" ]]; then
+            found_dirs+=("$dir")
+            echo "📍 Found: $dir"
+        fi
+    done
+    
+    echo ""
+    echo "Please enter the path to your access log file:"
+    echo "Examples:"
+    for dir in "${found_dirs[@]}"; do
+        echo "  $dir/your-domain.com_access_log"
+    done
+    echo "  /full/path/to/your/access_log"
+    echo ""
+    read -p "➡️  Log file path: " log_file
+    
+    # Validate file
+    if [[ ! -f "$log_file" ]]; then
+        echo "❌ Error: File '$log_file' does not exist or is not a file"
         exit 1
     fi
+    
+    if [[ ! -r "$log_file" ]]; then
+        echo "❌ Error: Cannot read file '$log_file' (permission denied)"
+        exit 1
+    fi
+    
+    echo "✅ Using file: $log_file"
+    echo "$log_file"
 }
 
-# Get time range pattern
+# Interactive time range selection
+select_time_range() {
+    echo ""
+    echo "⏰ TIME RANGE SELECTION"
+    echo "======================"
+    echo "1. Today's entries"
+    echo "2. Last hour" 
+    echo "3. Last 10 minutes"
+    echo "4. All entries (entire file)"
+    echo ""
+    
+    while true; do
+        read -p "➡️  Select option (1-4): " choice
+        
+        case "$choice" in
+            1)
+                echo "today"
+                return
+                ;;
+            2)
+                echo "last-hour" 
+                return
+                ;;
+            3)
+                echo "last-10mins"
+                return
+                ;;
+            4)
+                echo "all"
+                return
+                ;;
+            *)
+                echo "❌ Please enter a number between 1 and 4"
+                ;;
+        esac
+    done
+}
+
+# Get time pattern for filtering
 get_time_pattern() {
     local mode="$1"
     
@@ -73,19 +135,15 @@ get_time_pattern() {
             date +"%d/%b/%Y"
             ;;
         "last-hour")
-            # Current time and 1 hour ago in log format
-            local current_hour=$(date +"%H")
-            local previous_hour=$((10#${current_hour} - 1))
-            # Handle hour wrap-around
-            if [[ $previous_hour -lt 0 ]]; then
-                previous_hour=23
-            fi
-            # Format to 2 digits
-            printf "%02d" $previous_hour
+            # Last hour in log format
+            date -d '1 hour ago' +"%d/%b/%Y:%H"
             ;;
         "last-10mins")
-            # Current time in log format (will filter precisely later)
-            date +"%d/%b/%Y:%H:%M"
+            # Last 10 minutes (we'll filter more precisely)
+            date -d '10 minutes ago' +"%d/%b/%Y:%H:%M"
+            ;;
+        "all")
+            echo "all"
             ;;
         *)
             echo "Error: Unknown time mode '$mode'" >&2
@@ -94,13 +152,16 @@ get_time_pattern() {
     esac
 }
 
-# Extract IPs from log file or directory
+# Extract IPs based on time range
 extract_ips() {
-    local source="$1"
+    local log_file="$1"
     local mode="$2"
     local output_file="$3"
     
-    echo "Analyzing: $source"
+    echo ""
+    echo "🔍 EXTRACTING IP ADDRESSES"
+    echo "=========================="
+    echo "File: $(basename "$log_file")"
     echo "Time range: $mode"
     
     local time_pattern
@@ -109,78 +170,39 @@ extract_ips() {
     # Create temp file for filtered logs
     local temp_logs="/tmp/logs.$$"
     
-    if [[ -f "$source" ]]; then
-        # Single file mode
-        if [[ ! -r "$source" ]]; then
-            echo "Error: Cannot read file: $source" >&2
-            return 1
-        fi
-        
-        echo "Processing file: $(basename "$source")"
-        
-        case "$mode" in
-            "today")
-                grep -h "$time_pattern" "$source" > "$temp_logs" 2>/dev/null || true
-                ;;
-            "last-hour")
-                # Filter for last hour
-                grep -h "$time_pattern" "$source" > "$temp_logs" 2>/dev/null || true
-                ;;
-            "last-10mins")
-                # More precise filtering for last 10 minutes
-                local ten_mins_ago=$(date -d '10 minutes ago' +"%d/%b/%Y:%H:%M")
-                local current_time=$(date +"%d/%b/%Y:%H:%M")
-                # This is approximate - we'll use grep for the minute part
-                awk -v pattern="$time_pattern" '$0 ~ pattern' "$source" > "$temp_logs" 2>/dev/null || true
-                ;;
-        esac
-        
-    elif [[ -d "$source" ]]; then
-        # Directory mode - find all access logs
-        echo "Searching for log files in: $source"
-        
-        local log_files
-        log_files=$(find "$source" -maxdepth 1 -type f \( -name "*access*log" -o -name "*.log" \) \
-                   ! -name "*.gz" ! -name "*.*[0-9]" 2>/dev/null | head -10)
-        
-        if [[ -z "$log_files" ]]; then
-            echo "Error: No log files found in $source" >&2
-            return 1
-        fi
-        
-        # Process each file
-        while IFS= read -r logfile; do
-            if [[ -r "$logfile" ]]; then
-                case "$mode" in
-                    "today")
-                        grep -h "$time_pattern" "$logfile" >> "$temp_logs" 2>/dev/null || true
-                        ;;
-                    "last-hour")
-                        grep -h "$time_pattern" "$logfile" >> "$temp_logs" 2>/dev/null || true
-                        ;;
-                    "last-10mins")
-                        awk -v pattern="$time_pattern" '$0 ~ pattern' "$logfile" >> "$temp_logs" 2>/dev/null || true
-                        ;;
-                esac
-            fi
-        done <<< "$log_files"
-    else
-        echo "Error: Source '$source' is not a file or directory" >&2
-        return 1
-    fi
+    case "$mode" in
+        "today")
+            echo "Filtering today's entries..."
+            grep -h "$time_pattern" "$log_file" > "$temp_logs" 2>/dev/null || true
+            ;;
+        "last-hour")
+            echo "Filtering last hour's entries..."
+            grep -h "$time_pattern" "$log_file" > "$temp_logs" 2>/dev/null || true
+            ;;
+        "last-10mins")
+            echo "Filtering last 10 minutes entries..."
+            # More precise filtering for minutes
+            local current_time=$(date +"%d/%b/%Y:%H:%M")
+            awk -v pattern="$time_pattern" '$4 ~ pattern' "$log_file" > "$temp_logs" 2>/dev/null || true
+            ;;
+        "all")
+            echo "Processing all entries..."
+            cat "$log_file" > "$temp_logs" 2>/dev/null || true
+            ;;
+    esac
     
     # Check if we got any log entries
     local total_lines
     total_lines=$(wc -l < "$temp_logs" 2>/dev/null || echo 0)
     
     if [[ "$total_lines" == "0" ]]; then
-        echo "No log entries found for the specified time range"
+        echo "❌ No log entries found for the selected time range"
         return 1
     fi
     
-    echo "Processing $total_lines log entries..."
+    echo "📊 Processing $total_lines log entries..."
     
-    # Extract IPs
+    # Extract IPs - simple and reliable
     awk '{print $1}' "$temp_logs" 2>/dev/null | \
     grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | \
     sort | uniq -c | sort -nr | head -30 > "$output_file"
@@ -189,11 +211,11 @@ extract_ips() {
     ip_count=$(wc -l < "$output_file" 2>/dev/null || echo 0)
     
     if [[ "$ip_count" == "0" ]]; then
-        echo "Error: No IP addresses could be extracted"
+        echo "❌ No IP addresses could be extracted"
         return 1
     fi
     
-    echo "✓ Extracted $ip_count unique IP addresses"
+    echo "✅ Extracted $ip_count unique IP addresses"
     return 0
 }
 
@@ -230,53 +252,64 @@ get_risk_level() {
     fi
 }
 
+# Show recent log entries for high-risk IPs
+show_recent_entries() {
+    local log_file="$1"
+    local high_risk_ips=("$@")
+    
+    if [[ ${#high_risk_ips[@]} -eq 0 ]]; then
+        return
+    fi
+    
+    echo ""
+    echo "🔍 RECENT LOG ENTRIES FOR HIGH-RISK IPs"
+    echo "========================================"
+    
+    for ip in "${high_risk_ips[@]}"; do
+        echo ""
+        echo "🚨 HIGH-RISK IP: $ip"
+        echo "----------------------------------------"
+        
+        # Get last 5 entries for this IP from the log file
+        local recent_entries
+        recent_entries=$(grep "$ip" "$log_file" | tail -5)
+        
+        if [[ -n "$recent_entries" ]]; then
+            echo "Last 5 log entries:"
+            echo "-------------------"
+            echo "$recent_entries"
+        else
+            echo "No recent entries found for this IP"
+        fi
+    done
+}
+
 # Main function
 main() {
-    local source
-    local mode="today"
-    
-    # Parse arguments
-    case "$1" in
-        "--today")
-            source=$(find_log_directory)
-            mode="today"
-            ;;
-        "--last-hour")
-            source=$(find_log_directory)
-            mode="last-hour"
-            ;;
-        "--last-10mins")
-            source=$(find_log_directory) 
-            mode="last-10mins"
-            ;;
-        *)
-            if [[ -f "$1" ]] || [[ -d "$1" ]]; then
-                source="$1"
-                mode="today"
-            else
-                echo "Error: '$1' is not a valid file, directory, or option" >&2
-                usage
-            fi
-            ;;
-    esac
-    
-    echo "=== Log File Threat Analyzer ==="
-    echo "Starting analysis..."
+    echo "=== Single File IP Threat Analyzer ==="
+    echo ""
     
     # Check dependencies
     check_dependencies
-    echo "✓ Basic tools available"
+    echo "✅ Basic tools available"
+    
+    # Interactive selection
+    local log_file
+    log_file=$(select_log_file)
+    
+    local time_range
+    time_range=$(select_time_range)
     
     # Extract IPs
     local ip_file="/tmp/ips.$$"
-    if ! extract_ips "$source" "$mode" "$ip_file"; then
+    if ! extract_ips "$log_file" "$time_range" "$ip_file"; then
         exit 1
     fi
     
     # Analyze IPs
     echo ""
-    echo "THREAT ANALYSIS RESULTS:"
-    echo "======================="
+    echo "🛡️  THREAT ANALYSIS RESULTS"
+    echo "=========================="
     printf "%-6s %-18s %-12s %-8s %-8s %s\n" "Hits" "IP Address" "Country" "Pulses" "Risk" "Recommendation"
     echo "-----------------------------------------------------------------------"
     
@@ -322,22 +355,29 @@ main() {
         
     done < "$ip_file"
     
-    # Show results
+    # Show recent entries for high-risk IPs
+    show_recent_entries "$log_file" "${high_risk_ips[@]}"
+    
+    # Final summary
     echo ""
-    echo "=== ANALYSIS COMPLETE ==="
-    echo "Mode: $mode"
-    echo "Source: $source"
+    echo "✅ ANALYSIS COMPLETE"
+    echo "==================="
+    echo "File analyzed: $(basename "$log_file")"
+    echo "Time range: $time_range"
     echo "IPs checked: $(wc -l < "$ip_file")"
     echo "High-risk IPs: ${#high_risk_ips[@]}"
     
     if [[ ${#high_risk_ips[@]} -gt 0 ]]; then
         echo ""
-        echo "🚨 RECOMMENDED ACTIONS:"
-        echo "======================="
+        echo "🚨 RECOMMENDED BLOCKING COMMANDS:"
+        echo "================================"
         for ip in "${high_risk_ips[@]}"; do
-            echo "csf -d $ip  # Block high-risk IP"
+            echo "csf -d $ip"
         done
     fi
+    
+    echo ""
+    echo "💡 Note: High-risk IPs have >10 threat intelligence reports"
 }
 
 # Run main function
