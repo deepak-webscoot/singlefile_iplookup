@@ -17,12 +17,10 @@ trap cleanup EXIT INT TERM
 # Display usage
 usage() {
     echo "=== Single File IP Threat Analyzer ==="
+    echo "Usage: $0 [LOG_FILE]"
     echo ""
-    echo "This script will:"
-    echo "1. Ask for log file location"
-    echo "2. Ask for time range to analyze"
-    echo "3. Show threat analysis results"
-    echo "4. Show recent log entries for high-risk IPs"
+    echo "If LOG_FILE is provided, uses that file directly"
+    echo "If no argument, asks for file interactively"
     echo ""
     exit 0
 }
@@ -293,10 +291,16 @@ main() {
     check_dependencies
     echo "✅ Basic tools available"
     
-    # Interactive selection
+    # Handle file argument or ask interactively
     local log_file
-    log_file=$(select_log_file)
+    if [[ "$#" -eq 1 ]] && [[ -f "$1" ]]; then
+        log_file="$1"
+        echo "✅ Using provided file: $log_file"
+    else
+        log_file=$(select_log_file)
+    fi
     
+    # Always ask for time range
     local time_range
     time_range=$(select_time_range)
     
@@ -380,5 +384,5 @@ main() {
     echo "💡 Note: High-risk IPs have >10 threat intelligence reports"
 }
 
-# Run main function
+# Run main function with all arguments
 main "$@"
