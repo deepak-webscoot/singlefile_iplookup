@@ -1,4 +1,4 @@
-# IP Threat Intelligence Analyzer
+# Single FIle IP Threat Intelligence Analyzer
 
 A powerful bash script that analyzes web server access logs to identify potentially malicious IP addresses using AlienVault OTX threat intelligence.
 
